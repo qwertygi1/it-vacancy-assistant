@@ -1,0 +1,6 @@
+telethon
+psycopg2-binary
+ollama
+rich
+pydantic
+python-dotenv
