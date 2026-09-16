@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from telethon import TelegramClient
 from ollama import Client as OllamaClient
 from dotenv import load_dotenv
-from db import save_vacancy, init_db, vacancy_exists
+from db import save_vacancy, init_db, vacancy_exists, clear_db
 
 load_dotenv()
 
@@ -32,7 +32,7 @@ class VacancySchema(BaseModel):
     is_vacancy: Optional[bool] = Field(default=True, description="Является ли сообщение вакансией")
 
 # Инициализация клиентов
-api_id = os.getenv("TELEGRAM_API_ID")
+api_id = int(os.getenv("TELEGRAM_API_ID", "0"))
 api_hash = os.getenv("TELEGRAM_API_HASH")
 raw_channels = os.getenv("TELEGRAM_CHANNELS", "").split(",")
 ollama_client = OllamaClient(host=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
@@ -104,29 +104,53 @@ async def process_message(message_text: str):
 
 async def main():
     parser = argparse.ArgumentParser(description="Сборщик вакансий из Telegram-каналов в базу PostgreSQL")
-    parser.add_argument("--limit", type=int, default=int(os.getenv("MESSAGES_LIMIT", "10")), help="Лимит сообщений на канал (по умолчанию 10)")
-    parser.add_argument("--since", type=str, default=None, help="Дата начала в формате YYYY-MM-DD (например 2026-03-01)")
+    parser.add_argument("--limit", type=int, default=None, help="Лимит сообщений на канал (по умолчанию 10, если не задан --since)")
+    parser.add_argument("--since", type=str, default=None, help="Дата начала (с какого числа) в формате YYYY-MM-DD (например 2026-06-01)")
+    parser.add_argument("--until", type=str, default=None, help="Дата окончания (по какое число) в формате YYYY-MM-DD (например 2026-08-31)")
     parser.add_argument("--channel", type=str, default=None, help="Собрать только из одного указанного канала")
+    parser.add_argument("--clear-db", action="store_true", help="Очистить базу данных перед сбором (начать начисто)")
     
     args = parser.parse_args()
+    
+    # Если дата не указана и лимит не передан — берем дефолтный лимит 10
+    limit = args.limit
+    if limit is None and not args.since:
+        limit = int(os.getenv("MESSAGES_LIMIT", "10"))
     
     since_date = None
     if args.since:
         try:
             since_date = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            print(f"[Настройка] Фильтр по дате: сбор вакансий начиная с {args.since}")
         except ValueError:
-            print(f"[Ошибка] Неверный формат даты: {args.since}. Используйте формат YYYY-MM-DD (например 2026-03-01)")
+            print(f"[Ошибка] Неверный формат даты --since: {args.since}. Используйте YYYY-MM-DD")
+            return
+
+    until_date = None
+    if args.until:
+        try:
+            # Конец указанного дня: 23:59:59
+            until_date = datetime.strptime(args.until + " 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(f"[Ошибка] Неверный формат даты --until: {args.until}. Используйте YYYY-MM-DD")
             return
 
     init_db()
+
+    if args.clear_db:
+        clear_db()
     
     if args.channel:
         channels = [clean_channel_name(args.channel)]
     else:
         channels = [clean_channel_name(ch) for ch in raw_channels if clean_channel_name(ch)]
     
-    limit_info = f"начиная с {args.since}" if args.since else f"лимит {args.limit} сообщений на канал"
+    dates_info = []
+    if since_date:
+        dates_info.append(f"с {args.since}")
+    if until_date:
+        dates_info.append(f"по {args.until}")
+    limit_info = " ".join(dates_info) if dates_info else f"лимит {limit} сообщений на канал"
+    
     print(f"Всего каналов: {len(channels)} -> {channels}")
     print(f"Режим сбора: {limit_info}\n")
     
@@ -139,9 +163,13 @@ async def main():
                 count_existing = 0
                 count_skipped = 0
                 
-                async for message in client.iter_messages(entity, limit=args.limit):
-                    # Проверка даты
-                    if since_date and message.date < since_date:
+                async for message in client.iter_messages(entity, limit=limit):
+                    # Проверка даты окончания (если сообщение новее, чем until — пропускаем)
+                    if until_date and message.date and message.date > until_date:
+                        continue
+
+                    # Проверка даты начала (если сообщение старше, чем since — останавливаем чтение канала)
+                    if since_date and message.date and message.date < since_date:
                         print(f"  [i] Достигнута граница даты ({message.date.strftime('%Y-%m-%d')} < {args.since}), завершаем канал.")
                         break
                         
@@ -158,10 +186,15 @@ async def main():
                     # Извлечение через Ollama
                     vacancy_data = await process_message(message.text)
                     if vacancy_data:
+                        vacancy_data['channel'] = channel
+                        vacancy_data['message_id'] = message.id
+                        vacancy_data['published_at'] = message.date.replace(tzinfo=None) if message.date else None
+
                         vacancy_id = save_vacancy(vacancy_data)
                         if vacancy_id:
                             count_saved += 1
-                            print(f"  [+] [{vacancy_id}] {vacancy_data.get('title')} ({vacancy_data.get('company') or 'Компания не указана'})")
+                            date_str = message.date.strftime('%d.%m.%Y') if message.date else 'н/д'
+                            print(f"  [+] [{vacancy_id}] ({date_str}) {vacancy_data.get('title')} ({vacancy_data.get('company') or 'Компания не указана'})")
                         else:
                             count_existing += 1
                     else:
