@@ -71,17 +71,23 @@ NLU_PROMPT = """
 }
 
 Правила классификации:
-- intent: "analytics" — если вопрос касается ЧАСТОТЫ, ВОСТРЕБОВАННОСТИ, РЕЙТИНГА, КОЛИЧЕСТВА ПУБЛИКАЦИЙ, ТРЕНДОВ или СТАТИСТИКИ (например: "какая вакансия попадается чаще всего?", "что самое востребованное?", "сколько раз тебе попадались эти вакансии?", "какой стек самый частый?", "топ профессий", "статистика по рынку", "какие тренды по python").
+- intent: "analytics" — если вопрос касается ЧАСТОТЫ, ВОСТРЕБОВАННОСТИ, РЕЙТИНГА, КОЛИЧЕСТВА ПУБЛИКАЦИЙ, ТРЕНДОВ или СТАТИСТИКИ (например: "какая вакансия попадается чаще всего?", "что самое востребованное?", "сколько раз тебе попадались эти вакансии?", "какой стек самый частый?", "топ профессий", "статистика по рынку", "какие тренды по python", "какие еще есть популярные вакансии").
 - intent: "search" — если пользователь прямо просит НАЙТИ/ПОКАЗАТЬ конкретные вакансии для отклика со ссылками и контактами (например: "найди вакансии python", "покажи удаленку", "есть вакансии для junior?", "вакансии за август").
 - intent: "chat" — если это приветствие, вопрос о датах базы ("за какую дату вакансии?"), совет по резюме или продолжение разговора.
+
+ВАЖНО ДЛЯ АНАЛИТИКИ:
+- Если пользователь просит ОБЩИЙ рейтинг или топ ("какие еще есть популярные вакансии?", "топ вакансий вообще", "что еще востребовано?") — ставь "keyword": null (чтобы анализировать ВСЮ базу).
+- НЕ превращай разговорные реплики и реакции ("это важно", "понятно", "подметил об удаленке") в ключевые слова для поиска. Если вопрос общий, ставь "keyword": null.
 
 Примеры:
 - "Привет, как дела?" -> {"intent": "chat", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
 - "За какую дату у тебя вакансии?" -> {"intent": "chat", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
 - "Какая вакансия попадается чаще всего?" -> {"intent": "analytics", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
+- "Это важно то что ты подметил об удаленке, какие еще есть топ самых популярных вакансий?" -> {"intent": "analytics", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
 - "Что самое востребованное на рынке?" -> {"intent": "analytics", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
 - "Сколько раз тебе попадались эти вакансии?" -> {"intent": "analytics", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
 - "Какие навыки сейчас в топе?" -> {"intent": "analytics", "profession": null, "grade": null, "skills": [], "is_remote": null, "keyword": null}
+- "Какие тренды по Python?" -> {"intent": "analytics", "profession": "Python", "grade": null, "skills": ["python"], "is_remote": null, "keyword": "python"}
 - "Что есть по Python разработчикам?" -> {"intent": "search", "profession": "Python", "grade": null, "skills": ["python"], "is_remote": null, "keyword": null}
 - "Ищу Middle DevOps на удаленку" -> {"intent": "search", "profession": "DevOps", "grade": "middle", "skills": ["devops"], "is_remote": true, "keyword": null}
 """
@@ -141,6 +147,11 @@ def run_chat_turn(user_query: str, history: list) -> str:
     extra_context = ""
     if intent_data.intent == "analytics":
         keyword = intent_data.keyword or intent_data.profession
+        if keyword:
+            stopwords_k = {'удаленка', 'удаленке', 'вакансия', 'вакансии', 'популярных', 'еще', 'рынок', 'рынка', 'самых'}
+            if keyword.lower().strip() in stopwords_k:
+                keyword = None
+
         stats = get_market_analytics(keyword=keyword)
         total_a = stats.get("total", 0)
         console.print(f"[dim green]Сформирована аналитика рынка по {total_a} вакансиям[/dim green]")
