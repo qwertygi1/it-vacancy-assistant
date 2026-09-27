@@ -197,9 +197,56 @@ def get_market_analytics(since=None, until=None, keyword=None):
         remote_cnt = rem_row[0] or 0
         office_cnt = rem_row[1] or 0
 
+        # 7. Распределение по сферам/направлениям
+        cur.execute(f"""
+            SELECT 
+                CASE 
+                    WHEN title ILIKE '%%qa%%' OR title ILIKE '%%test%%' OR title ILIKE '%%тестировщик%%' OR title ILIKE '%%тестировани%%' THEN 'Тестирование (QA)'
+                    WHEN title ILIKE '%%дизайн%%' OR title ILIKE '%%design%%' OR title ILIKE '%%ux%%' OR title ILIKE '%%ui%%' OR title ILIKE '%%3d%%' OR title ILIKE '%%художник%%' THEN 'Дизайн (UI/UX)'
+                    WHEN title ILIKE '%%devops%%' OR title ILIKE '%%sre%%' OR title ILIKE '%%администратор%%' OR title ILIKE '%%сисадмин%%' OR title ILIKE '%%поддержк%%' OR title ILIKE '%%support%%' OR title ILIKE '%%helpdesk%%' OR title ILIKE '%%сетевой%%' THEN 'Инфраструктура и Поддержка (DevOps/Sysadmin)'
+                    WHEN title ILIKE '%%аналитик%%' OR title ILIKE '%%analyst%%' OR title ILIKE '%%data%%' OR title ILIKE '%%ml %%' OR title ILIKE '%%ai %%' OR title ILIKE '%%bi %%' THEN 'Данные и Аналитика (Data/AI/BI)'
+                    WHEN title ILIKE '%%product%%' OR title ILIKE '%%project%%' OR title ILIKE '%%менеджер%%' OR title ILIKE '%%manager%%' OR title ILIKE '%%scrum%%' OR title ILIKE '%%руководитель%%' OR title ILIKE '%%team lead%%' OR title ILIKE '%%tech lead%%' OR title ILIKE '%%head of%%' THEN 'Менеджмент и Продукт (Product/Project/Lead)'
+                    WHEN title ILIKE '%%developer%%' OR title ILIKE '%%разработчик%%' OR title ILIKE '%%backend%%' OR title ILIKE '%%frontend%%' OR title ILIKE '%%fullstack%%' OR title ILIKE '%%mobile%%' OR title ILIKE '%%engineer%%' OR title ILIKE '%%инженер%%' OR title ILIKE '%%программист%%' THEN 'Разработка ПО (Backend/Frontend/Mobile)'
+                    ELSE 'Другие IT-специальности'
+                END as category,
+                COUNT(*) as cnt
+            FROM vacancies
+            WHERE {where_sql}
+            GROUP BY category
+            ORDER BY cnt DESC;
+        """, args)
+        categories = [
+            {"category": r[0], "count": r[1], "pct": round(r[1] / total * 100, 1)}
+            for r in cur.fetchall()
+        ]
+
+        # 8. География вакансий (Города)
+        cur.execute(f"""
+            SELECT 
+                CASE 
+                    WHEN location ILIKE '%%астана%%' OR location ILIKE '%%astana%%' OR location ILIKE '%%нур-султан%%' THEN 'Астана'
+                    WHEN location ILIKE '%%алмат%%' OR location ILIKE '%%almaty%%' THEN 'Алматы'
+                    WHEN location ILIKE '%%remote%%' OR location ILIKE '%%удален%%' OR is_remote = true THEN 'Удаленно'
+                    WHEN location ILIKE '%%ташкент%%' OR location ILIKE '%%tashkent%%' THEN 'Ташкент'
+                    WHEN location IS NULL OR location = '' OR location ILIKE '%%не указан%%' THEN 'Не указано / По договоренности'
+                    ELSE 'Другие города'
+                END as city,
+                COUNT(*) as cnt
+            FROM vacancies
+            WHERE {where_sql}
+            GROUP BY city
+            ORDER BY cnt DESC;
+        """, args)
+        locations = [
+            {"city": r[0], "count": r[1], "pct": round(r[1] / total * 100, 1)}
+            for r in cur.fetchall()
+        ]
+
         return {
             "total": total,
             "date_range_str": date_str,
+            "categories": categories,
+            "locations": locations,
             "top_roles": top_roles,
             "top_skills": top_skills,
             "top_companies": top_companies,
